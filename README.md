@@ -3,7 +3,14 @@ Smart Energy Internet Strategies for Mobile Cellular
 
 This codebase quantified the implications of different smart energy internet strategies in
 terms of cost-efficiency, and the reduction in both carbon emissions and other air pollutants
-(such as NOx, SOx and PM10).
+(such as NOx, SOx and PM10). The modeling method is illustrated below:
+
+# Method
+
+<p align="center">
+  <img src="figures/Method.png"></img>
+</p>
+
 
 Using conda
 ==========
