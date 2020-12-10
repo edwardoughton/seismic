@@ -8,7 +8,7 @@ terms of cost-efficiency, and the reduction in both carbon emissions and other a
 # Method
 
 <p align="center">
-  <img src="figures/Method.png"></img>
+  <img src="figures/method.png"></img>
 </p>
 
 
@@ -34,6 +34,30 @@ First, install required packages for preprocessing and running:
 Secondly, install optional packages for data visualization:
 
     conda install matplotlib seaborn contextily descartes
+
+
+Getting Started
+===============
+
+To begin you need to prepare the model data by running (you need to download the required
+datasets first - see section below for a list):
+
+    python scripts/prep.py
+
+Once complete, you can actually generate the results by running:
+
+    python scripts/run.py
+
+
+Required Data
+=============
+
+Quite a few datasets need to be downloaded and placed in the `data/raw` folder, including:
+
+- The Database of Global Administrative Areas (GADM) (https://gadm.org/)
+- Mobile Coverage Explorer (MCE) (CollinsBartholomew) (https://www.collinsbartholomew.com)
+- Gridfinder (https://gridfinder.org/)
+- WorldPop 2020 1km population counts (https://www.worldpop.org/)
 
 
 Background and funding
