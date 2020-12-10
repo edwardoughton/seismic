@@ -90,6 +90,7 @@ def estimate_phone_adoption(population):
 
     return phones
 
+
 def estimate_smartphone_adoption(phones):
     """
     Estimate total smartphone users for this settlement.
