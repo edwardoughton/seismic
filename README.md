@@ -8,7 +8,7 @@ terms of cost-efficiency, and the reduction in both carbon emissions and other a
 # Method
 
 <p align="center">
-  <img src="figures/method.png"></img>
+  <img src="figures/Method.png"></img>
 </p>
 
 
