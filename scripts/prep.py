@@ -10,15 +10,18 @@ import glob
 import numpy as np
 import pandas as pd
 import geopandas as gpd
+import random
 import pyproj
 from shapely.geometry import Point, LineString, Polygon, MultiPolygon, shape, mapping, box
-from shapely.ops import unary_union, nearest_points, transform
+from shapely.ops import unary_union, transform #nearest_points,
 import rasterio
 # import networkx as nx
-from rasterio.warp import calculate_default_transform, reproject, Resampling
+# from rasterio.warp import calculate_default_transform, reproject, Resampling
 from rasterio.mask import mask
 from rasterstats import zonal_stats, gen_zonal_stats
-import unrasterize
+# import unrasterize
+
+random.seed(1)
 
 CONFIG = configparser.ConfigParser()
 CONFIG.read(os.path.join(os.path.dirname(__file__), 'script_config.ini'))
@@ -819,9 +822,14 @@ def get_settlement_data(country):
                 buffer['geometry'], array, stats=['sum'], affine=affine, nodata=-999)[0]
 
         if query['sum'] > 0:
-            power_type = 'on'
+            power_type = 'on_grid'
         else:
-            power_type = 'off'
+            value = random.random()
+            if value > 0.5:
+                tech = 'diesel'
+            else:
+                tech = 'solar'
+            power_type = 'off_grid_{}'.format(tech)
 
         results.append({
             'GID_0': settlement['GID_0'],

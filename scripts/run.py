@@ -19,12 +19,11 @@ DATA_INTERMEDIATE = os.path.join(BASE_PATH, 'intermediate')
 RESULTS = os.path.join(BASE_PATH, '..', 'results')
 
 
-def run_country(country):
+def run_country(country, strategies, technology_lut):
     """
 
     """
     iso3 = country['iso3']
-
 
     folder_out = os.path.join(RESULTS, iso3)
     if not os.path.exists(folder_out):
@@ -36,7 +35,7 @@ def run_country(country):
     #     os.makedirs(path_out)
 
     path = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', 'settlement_data.csv')
-    settlements = pd.read_csv(path)[:5]
+    settlements = pd.read_csv(path)#[:5]
 
     output = []
 
@@ -50,28 +49,31 @@ def run_country(country):
 
         data_consumption = estimate_data_consumption(active_users)
 
-        electricity_consumption = estimate_electricity_consumption(data_consumption)
+        for strategy in strategies:
 
-        emissions = estimate_emissions(electricity_consumption)
+            electricity_consumption = estimate_electricity_consumption(data_consumption, strategy)
 
-        output.append({
-            'GID_0': settlement['GID_0'],
-            'GID_level': settlement['GID_level'],
-            'population': settlement['population'],
-            'type': settlement['type'],
-            'lon': settlements['lon'],
-            'lat': settlements['lat'],
-            'on_grid': settlements['on_grid'],
-            'phones': phones,
-            'smartphones': smartphones,
-            'active_users': active_users,
-            'data_consumption_GB': data_consumption,
-            'electricity_consumption_kWh': electricity_consumption,
-            'carbon_kgs': emissions['carbon_kgs'],
-            'nitrogen_oxides_kgs': emissions['nitrogen_oxides_kgs'],
-            'sulpher_oxides_kgs': emissions['sulpher_oxides_kgs'],
-            'pm10_kgs': emissions['pm10_kgs'],
-        })
+            emissions = estimate_emissions(electricity_consumption, settlement['on_grid'], strategy, technology_lut)
+
+            output.append({
+                'GID_0': settlement['GID_0'],
+                'GID_level': settlement['GID_level'],
+                'lon': settlement['lon'],#.values[0],
+                'lat': settlement['lat'],#.values[0],
+                'strategy': strategy,
+                'on_grid': settlement['on_grid'],#.values[0],
+                'type': settlement['type'],
+                'population': settlement['population'],
+                'phones': phones,
+                'smartphones': smartphones,
+                'active_users': active_users,
+                'data_consumption_GB': data_consumption,
+                'electricity_consumption_kWh': electricity_consumption,
+                'carbon_kgs': emissions['carbon_kgs'],
+                'nitrogen_oxides_kgs': emissions['nitrogen_oxides_kgs'],
+                'sulpher_oxides_kgs': emissions['sulpher_oxides_kgs'],
+                'pm10_kgs': emissions['pm10_kgs'],
+            })
 
     output = pd.DataFrame(output)
     output.to_csv(path_out, index=False)
@@ -128,7 +130,7 @@ def estimate_data_consumption(active_users):
     return data_consumption
 
 
-def estimate_electricity_consumption(data_consumption):
+def estimate_electricity_consumption(data_consumption, strategy):
     """
     Estimate annual electricity consumption for this settlement.
 
@@ -140,27 +142,50 @@ def estimate_electricity_consumption(data_consumption):
     return electricity_consumption
 
 
-def estimate_emissions(electricity_consumption):
+def estimate_emissions(electricity_consumption, on_grid, strategy, technology_lut):
     """
     Estimate emissions released from energy consumption.
 
     """
-    carbon_per_kWh = 0.5 #kgs of carbon per kWh
-    nitrogen_oxide_per_kWh = 0.00009#kgs of nitrogen oxide (NOx) per kWh
-    sulpher_dioxide_per_kWh = 0.007 #kgs of sulpher dioxide (SO2) per kWh
-    pm10_per_kWh = 0.002 #kgs of PM10 per kWh
+    if on_grid == 'on_grid':
+        power_type = on_grid
+    else:
+        power_type = on_grid.split('_')[2]
+
+    lut = technology_lut[power_type]
 
     output = {}
 
-    output['carbon_kgs'] = electricity_consumption * carbon_per_kWh
-    output['nitrogen_oxides_kgs'] = electricity_consumption * nitrogen_oxide_per_kWh
-    output['sulpher_oxides_kgs'] = electricity_consumption * sulpher_dioxide_per_kWh
-    output['pm10_kgs'] = electricity_consumption * pm10_per_kWh
+    output['carbon_kgs'] = electricity_consumption * lut['carbon_per_kWh']
+    output['nitrogen_oxides_kgs'] = electricity_consumption * lut['nitrogen_oxide_per_kWh']
+    output['sulpher_oxides_kgs'] = electricity_consumption * lut['sulpher_dioxide_per_kWh']
+    output['pm10_kgs'] = electricity_consumption * lut['pm10_per_kWh']
 
     return output
 
 
 if __name__ == '__main__':
+
+    technology_lut = {
+        'on_grid': {
+            'carbon_per_kWh': 0.5, #kgs of carbon per kWh
+            'nitrogen_oxide_per_kWh':0.00009, #kgs of nitrogen oxide (NOx) per kWh
+            'sulpher_dioxide_per_kWh': 0.007, #kgs of sulpher dioxide (SO2) per kWh
+            'pm10_per_kWh': 0.002, #kgs of PM10 per kWh
+        },
+        'diesel': {
+            'carbon_per_kWh': 0.5, #kgs of carbon per kWh
+            'nitrogen_oxide_per_kWh':0.00009, #kgs of nitrogen oxide (NOx) per kWh
+            'sulpher_dioxide_per_kWh': 0.007, #kgs of sulpher dioxide (SO2) per kWh
+            'pm10_per_kWh': 0.002, #kgs of PM10 per kWh
+        },
+        'solar': {
+            'carbon_per_kWh': 0.1, #kgs of carbon per kWh
+            'nitrogen_oxide_per_kWh':0.000001, #kgs of nitrogen oxide (NOx) per kWh
+            'sulpher_dioxide_per_kWh': 0.0001, #kgs of sulpher dioxide (SO2) per kWh
+            'pm10_per_kWh': 0.00001, #kgs of PM10 per kWh
+        }
+    }
 
     # countries = find_country_list(['Africa'])
 
@@ -175,8 +200,14 @@ if __name__ == '__main__':
         # },
     ]
 
+    strategies = [
+        'baseline',
+        'smart_diesel_generators',
+        'solar'
+    ]
+
     for country in countries:
 
         print('Working on {}'.format(country['iso3']))
 
-        run_country(country)
+        run_country(country, strategies, technology_lut)
