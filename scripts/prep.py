@@ -95,7 +95,9 @@ def process_country_shapes(country):
     path = os.path.join(DATA_INTERMEDIATE, iso3)
 
     if os.path.exists(os.path.join(path, 'national_outline.shp')):
-        return 'Completed national outline processing'
+        return
+
+    print('Processing country boundary ready to export')
 
     if not os.path.exists(path):
         os.makedirs(path)
@@ -145,6 +147,8 @@ def process_regions(country):
         if os.path.exists(path_processed):
             continue
 
+        print('Processing regions ready to export')
+
         if not os.path.exists(folder):
             os.mkdir(folder)
 
@@ -155,6 +159,8 @@ def process_regions(country):
         regions = regions[regions.GID_0 == iso3]
 
         regions['geometry'] = regions.apply(exclude_small_shapes, axis=1)
+
+        regions = regions[~regions.is_empty]
 
         try:
             regions.to_file(path_processed, driver='ESRI Shapefile')
@@ -176,7 +182,6 @@ def process_settlement_layer(country):
 
     """
     iso3 = country['iso3']
-    regional_level = country['regional_level']
 
     path_settlements = os.path.join(DATA_RAW,'settlement_layer',
         'ppp_2020_1km_Aggregated.tif')
@@ -198,6 +203,8 @@ def process_settlement_layer(country):
 
     if os.path.exists(shape_path):
         return
+
+    print('Processing country population raster ready to export')
 
     geo = gpd.GeoDataFrame({'geometry': country['geometry']})
 
@@ -252,6 +259,8 @@ def process_electricity_layer(country):
     if os.path.exists(path_out):
         return
 
+    print('Processing electricity layer raster layer ready to export')
+
     geo = gpd.GeoDataFrame({'geometry': country['geometry']})
 
     coords = [json.loads(geo.to_json())['features'][0]['geometry']]
@@ -267,6 +276,60 @@ def process_electricity_layer(country):
                     "crs": 'epsg:4326'})
 
     with rasterio.open(path_out, "w", **out_meta) as dest:
+            dest.write(out_img)
+
+    return
+
+
+def process_night_lights(country):
+    """
+    Clip the nightlights layer to the chosen country boundary and place in
+    desired country folder.
+
+    Parameters
+    ----------
+    country : string
+        Three digit ISO country code.
+
+    """
+    iso3 = country['iso3']
+
+    folder = os.path.join(DATA_INTERMEDIATE, iso3)
+    path_output = os.path.join(folder,'night_lights.tif')
+
+    if os.path.exists(path_output):
+        return
+
+    print('Working on processing of nightlight layer')
+
+    path_country = os.path.join(folder, 'national_outline.shp')
+
+    filename = 'F182013.v4c_web.stable_lights.avg_vis.tif'
+    path_night_lights = os.path.join(DATA_RAW, 'nightlights', '2013', filename)
+
+    country = gpd.read_file(path_country)
+
+    bbox = country.envelope
+
+    geo = gpd.GeoDataFrame()
+    geo = gpd.GeoDataFrame({'geometry': bbox}, crs='epsg:4326')
+
+    coords = [json.loads(geo.to_json())['features'][0]['geometry']]
+
+    night_lights = rasterio.open(path_night_lights, "r+")
+    night_lights.nodata = 0
+
+    out_img, out_transform = mask(night_lights, coords, crop=True)
+
+    out_meta = night_lights.meta.copy()
+
+    out_meta.update({"driver": "GTiff",
+                    "height": out_img.shape[1],
+                    "width": out_img.shape[2],
+                    "transform": out_transform,
+                    "crs": 'epsg:4326'})
+
+    with rasterio.open(path_output, "w", **out_meta) as dest:
             dest.write(out_img)
 
     return
@@ -342,6 +405,8 @@ def get_regional_data(country):
     if os.path.exists(path_output):
         return
 
+    print('Getting regional data')
+
     filename = 'regions_{}_{}.shp'.format(regional_level, iso3)
     path_input = os.path.join(DATA_INTERMEDIATE, iso3, 'regions', filename)
     regions = gpd.read_file(path_input, crs='epsg:4326')#[:5]
@@ -350,6 +415,7 @@ def get_regional_data(country):
     coverage = get_coverage(country, regions)
     coverage_lut = convert_coverage_to_lookup(country, coverage)
 
+    path_night_lights = os.path.join(DATA_INTERMEDIATE, iso3, 'night_lights.tif')
     path_settlements = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements.tif')
 
     regions = regions.to_crs('epsg:4326') #need to be this crs for population estimate
@@ -359,6 +425,15 @@ def get_regional_data(country):
     for index, region in regions.iterrows():
 
         area_km2 = get_area(region)
+
+        with rasterio.open(path_night_lights) as src:
+
+            affine = src.transform
+            array = src.read(1)
+            array[array <= 0] = 0
+
+            luminosity_mean = zonal_stats(
+                region['geometry'], array, stats=['mean'], affine=affine, nodata=-999)[0]
 
         with rasterio.open(path_settlements) as src:
 
@@ -375,6 +450,7 @@ def get_regional_data(country):
             'population': population_summation['sum'],
             'area_km2': area_km2,
             'population_km2': population_summation['sum'] / area_km2,
+            'luminosity_mean': luminosity_mean['mean'],
             'coverage_2G_percent': coverage_lut[region[GID_level]]['2G'],
             'coverage_3G_percent': coverage_lut[region[GID_level]]['3G'],
             'coverage_4G_percent': coverage_lut[region[GID_level]]['4G'],
@@ -478,7 +554,12 @@ def get_coverage(country, regions):
                     affine=affine,
                     nodata=-999)[0]
 
-                interim[tech] = round(results['sum'] / results['count'] * 100, 1)
+                total = results['sum']
+
+                if total is not None:
+                    interim[tech] = round(total / results['count'] * 100, 1)
+                else:
+                    interim[tech] = 0
 
         output.append({
             GID_level: region[GID_level],
@@ -497,6 +578,7 @@ def get_coverage(country, regions):
 def estimate_sites(country, data):
     """
     Estimate sites based on mobile population coverage (2G-4G).
+
     Parameters
     ----------
     country :
@@ -549,6 +631,7 @@ def estimate_sites(country, data):
             'population': region['population'],
             'area_km2': region['area_km2'],
             'population_km2': region['population_km2'],
+            'luminosity_mean': region['luminosity_mean'],
             'coverage_2G_percent': region['coverage_2G_percent'],
             'coverage_3G_percent': region['coverage_3G_percent'],
             'coverage_4G_percent': region['coverage_4G_percent'],
@@ -581,6 +664,8 @@ def generate_settlement_layer(country):
 
     if os.path.exists(path_output):
         return
+
+    print('Generating the settlement layer ready to export')
 
     filename = 'regions_{}_{}.shp'.format(regional_level, iso3)
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'regions')
@@ -797,7 +882,10 @@ def get_settlement_data(country):
     if os.path.exists(path_output):
         return
 
+    print('Getting settlement data')
+
     path_elec_dist = os.path.join(DATA_INTERMEDIATE, iso3, 'electricity_dist.tif')
+    path_night_lights = os.path.join(DATA_INTERMEDIATE, iso3, 'night_lights.tif')
 
     filename = 'settlements.shp'
     path_input = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', filename)
@@ -808,7 +896,7 @@ def get_settlement_data(country):
 
     for index, settlement in settlements.iterrows():
 
-        buffer = settlement['geometry'].buffer(1000)
+        buffer = settlement['geometry'].buffer(5000)
         buffer = gpd.GeoDataFrame({'geometry': buffer}, index=[0], crs='epsg:3857')
         buffer = buffer.to_crs('epsg:4326')
 
@@ -831,6 +919,15 @@ def get_settlement_data(country):
                 tech = 'solar'
             power_type = 'off_grid_{}'.format(tech)
 
+        with rasterio.open(path_night_lights) as src:
+
+            affine = src.transform
+            array = src.read(1)
+            array[array <= 0] = 0
+
+            luminosity_mean = zonal_stats(
+                buffer, array, stats=['mean', 'sum', 'max'], affine=affine, nodata=-999)[0]
+
         results.append({
             'GID_0': settlement['GID_0'],
             'GID_level': settlement[GID_level],
@@ -838,7 +935,10 @@ def get_settlement_data(country):
             'type': settlement['type'],
             'lon': settlement['lon'],
             'lat': settlement['lat'],
-            'on_grid': power_type
+            'on_grid': power_type,
+            'luminosity_mean': luminosity_mean['mean'],
+            'luminosity_sum': luminosity_mean['sum'],
+            'luminosity_max': luminosity_mean['max'],
         })
 
     results_df = pd.DataFrame(results)
@@ -868,35 +968,30 @@ if __name__ == '__main__':
             'region': 'LAT', 'pop_density_km2': 100, 'settlement_size': 100,
             'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
         },
-        # {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
-        #     'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
-        #     'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
-        # },
+        {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
+            'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
+            'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
+        },
     ]
 
     for country in countries:
 
         print('Working on {}'.format(country['iso3']))
 
-        print('Processing country boundary ready to export')
         process_country_shapes(country)
 
-        print('Processing regions ready to export')
         process_regions(country)
 
-        print('Processing country population raster ready to export')
         process_settlement_layer(country)
 
-        print('Processing electricity layer raster layer ready to export')
         process_electricity_layer(country)
 
-        print('Getting regional data')
+        process_night_lights(country)
+
         get_regional_data(country)
 
-        print('Generating the settlement layer ready to export')
         generate_settlement_layer(country)
 
-        print('Getting regional data')
         get_settlement_data(country)
 
     print('Preprocessing complete')
