@@ -8,7 +8,7 @@ import glob
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-
+from random import random, uniform
 
 CONFIG = configparser.ConfigParser()
 CONFIG.read(os.path.join(os.path.dirname(__file__), 'script_config.ini'))
@@ -34,14 +34,24 @@ def run_country(country, strategies, technology_lut):
     # if not os.path.exists(path_out):
     #     os.makedirs(path_out)
 
+    total_unique_subscribers = get_total_unique_subscribers(country)
+
     path = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', 'settlement_data.csv')
-    settlements = pd.read_csv(path)#[:5]
+    settlements = pd.read_csv(path)#[:50]
+
+    settlements = process_settlements(settlements)
 
     output = []
+    subscribers_to_allocate = total_unique_subscribers
 
     for idx, settlement in settlements.iterrows():
 
-        phones = estimate_phone_adoption(settlement['population'])
+        # if subscribers_to_allocate <= 0:
+        #     subscribers_to_allocate = 0
+
+        phones = estimate_phone_adoption(settlement, subscribers_to_allocate)
+
+        # subscribers_to_allocate -= phones
 
         smartphones = estimate_smartphone_adoption(phones)
 
@@ -65,7 +75,9 @@ def run_country(country, strategies, technology_lut):
                 'type': settlement['type'],
                 'population': settlement['population'],
                 'phones': phones,
+                'phones_perc': round(phones / settlement['population'] * 100),
                 'smartphones': smartphones,
+                'smartphones_perc': round(smartphones / settlement['population'] * 100),
                 'active_users': active_users,
                 'data_consumption_GB': data_consumption,
                 'electricity_consumption_kWh': electricity_consumption,
@@ -81,14 +93,63 @@ def run_country(country, strategies, technology_lut):
     return
 
 
-def estimate_phone_adoption(population):
+def get_total_unique_subscribers(country):
+    """
+    Estimate the total number of unique subscribers.
+
+    """
+    iso3 = country['iso3']
+
+    path = os.path.join(DATA_RAW, 'gsma', 'gsma_unique_subscribers.csv')
+    data = pd.read_csv(path, encoding='latin-1')
+    data = data.to_dict('records')
+
+    for item in data:
+        if item['iso3'] == iso3:
+            penetration = item['2020']
+
+    path = os.path.join(DATA_INTERMEDIATE, iso3, 'regions', 'regional_data.csv')
+    data = pd.read_csv(path)
+    population = data['population'].sum()
+
+    total_unique_subscribers = round(population * penetration)
+
+    return total_unique_subscribers
+
+
+def process_settlements(settlements):
+    """
+
+    """
+    settlements = settlements.sort_values(by=['luminosity_mean'], ascending=False)
+
+    bins = [0, 1, 10, 65]
+    labels = ['Lower', 'Middle', 'Upper']
+
+    settlements['adoption_tier'] = pd.cut(settlements['luminosity_mean'], bins,
+        labels=labels, include_lowest =True)
+
+    return settlements
+
+
+def estimate_phone_adoption(settlement, subscribers_to_allocate):
     """
     Estimate total phone users for this settlement.
 
     """
-    phone_adoption_rate = 0.7
+    population = settlement['population']
+    adoption_tier = settlement['adoption_tier']
 
-    phones = population * phone_adoption_rate
+    if adoption_tier == 'Upper':
+        phone_adoption_rate = 0.8
+    elif adoption_tier == 'Middle':
+        phone_adoption_rate = 0.4
+    elif adoption_tier == 'Lower':
+        phone_adoption_rate = 0.2
+    else:
+        print('Did not recognize adoption_tier')
+
+    phones = round(population * phone_adoption_rate)
 
     return phones
 
@@ -98,9 +159,9 @@ def estimate_smartphone_adoption(phones):
     Estimate total smartphone users for this settlement.
 
     """
-    smartphone_adoption_rate = 0.5
+    smartphone_adoption_rate = uniform(0.05, 0.6)
 
-    smartphones = phones * smartphone_adoption_rate
+    smartphones = round(phones * smartphone_adoption_rate)
 
     return smartphones
 
@@ -194,10 +255,10 @@ if __name__ == '__main__':
             'region': 'SSA', 'pop_density_km2': 25, 'settlement_size': 500,
             'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
         },
-        # {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
-        #     'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
-        #     'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
-        # },
+        {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
+            'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
+            'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
+        },
     ]
 
     strategies = [
