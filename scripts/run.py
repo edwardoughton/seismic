@@ -10,6 +10,9 @@ import pandas as pd
 from tqdm import tqdm
 from random import random, uniform
 
+from costs import calculate_electricity_cost
+from emissions import estimate_emissions
+
 CONFIG = configparser.ConfigParser()
 CONFIG.read(os.path.join(os.path.dirname(__file__), 'script_config.ini'))
 BASE_PATH = CONFIG['file_locations']['base_path']
@@ -19,7 +22,7 @@ DATA_INTERMEDIATE = os.path.join(BASE_PATH, 'intermediate')
 RESULTS = os.path.join(BASE_PATH, '..', 'results')
 
 
-def run_country(country, strategies, technology_lut):
+def run_country(country, settlements, strategies, technology_lut, electricity_mix, energy_costs):
     """
 
     """
@@ -36,22 +39,12 @@ def run_country(country, strategies, technology_lut):
 
     total_unique_subscribers = get_total_unique_subscribers(country)
 
-    path = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', 'settlement_data.csv')
-    settlements = pd.read_csv(path)#[:50]
-
-    settlements = process_settlements(settlements)
-
     output = []
     subscribers_to_allocate = total_unique_subscribers
 
     for idx, settlement in settlements.iterrows():
 
-        # if subscribers_to_allocate <= 0:
-        #     subscribers_to_allocate = 0
-
         phones = estimate_phone_adoption(settlement, subscribers_to_allocate)
-
-        # subscribers_to_allocate -= phones
 
         smartphones = estimate_smartphone_adoption(phones)
 
@@ -63,7 +56,11 @@ def run_country(country, strategies, technology_lut):
 
             electricity_consumption = estimate_electricity_consumption(data_consumption, strategy)
 
-            emissions = estimate_emissions(electricity_consumption, settlement['on_grid'], strategy, technology_lut)
+            cost = calculate_electricity_cost(electricity_consumption, strategy,
+                electricity_mix, energy_costs)
+
+            emissions = estimate_emissions(electricity_consumption, settlement['on_grid'],
+                strategy, electricity_mix, technology_lut)
 
             output.append({
                 'GID_0': settlement['GID_0'],
@@ -81,6 +78,7 @@ def run_country(country, strategies, technology_lut):
                 'active_users': active_users,
                 'data_consumption_GB': data_consumption,
                 'electricity_consumption_kWh': electricity_consumption,
+                'cost_usd': cost,
                 'carbon_kgs': emissions['carbon_kgs'],
                 'nitrogen_oxides_kgs': emissions['nitrogen_oxides_kgs'],
                 'sulpher_oxides_kgs': emissions['sulpher_oxides_kgs'],
@@ -91,6 +89,16 @@ def run_country(country, strategies, technology_lut):
     output.to_csv(path_out, index=False)
 
     return
+
+
+def get_country_electricity_mix(country, electricity_mix):
+    """
+    Get the country electricity mix.
+
+    """
+    iso3 = country['iso3']
+
+    return country_elec_mix
 
 
 def get_total_unique_subscribers(country):
@@ -136,6 +144,18 @@ def estimate_phone_adoption(settlement, subscribers_to_allocate):
     """
     Estimate total phone users for this settlement.
 
+    Parameters
+    ----------
+    settlement : pandas series array
+        Contains all information about the settlement being modeled.
+    subscribers_to_allocate : int
+        The number of subscribers to allocate.
+
+    Returns
+    -------
+    phones : int
+        The total number of estimated phones for the settlement.
+
     """
     population = settlement['population']
     adoption_tier = settlement['adoption_tier']
@@ -158,6 +178,16 @@ def estimate_smartphone_adoption(phones):
     """
     Estimate total smartphone users for this settlement.
 
+    Parameters
+    ----------
+    phones : int
+        The total number of estimated phones for the settlement.
+
+    Returns
+    -------
+    smartphones : int
+        The total number of estimated smartphones for the settlement.
+
     """
     smartphone_adoption_rate = uniform(0.05, 0.6)
 
@@ -169,6 +199,16 @@ def estimate_smartphone_adoption(phones):
 def estimate_active_smarthpone_users(smartphones):
     """
     Estimate active smartphone users for this settlement.
+
+    Parameters
+    ----------
+    smartphones : int
+        The total number of estimated smartphones for the settlement.
+
+    Returns
+    -------
+    active_users : int
+        The total number of estimated active_users for the settlement.
 
     """
     active_user_rate = 0.1
@@ -182,11 +222,21 @@ def estimate_data_consumption(active_users):
     """
     Estimate annual data consumption for this settlement.
 
+    Parameters
+    ----------
+    active_users : int
+        The total number of estimated active_users for the settlement.
+
+    Returns
+    -------
+    data_consumption : int
+        The quantity of annual data consumption estimated for the settlement.
+
     """
     months = 12
     monthly_data_consumption = 12
 
-    data_consumption = active_users * monthly_data_consumption * months
+    data_consumption = round(active_users * monthly_data_consumption * months)
 
     return data_consumption
 
@@ -195,32 +245,40 @@ def estimate_electricity_consumption(data_consumption, strategy):
     """
     Estimate annual electricity consumption for this settlement.
 
+    Parameters
+    ----------
+    data_consumption : int
+        The quantity of annual data consumption estimated for the settlement.
+    strategy : string
+        The strategy being implemented.
+
+    Returns
+    -------
+    electricity_consumption : int
+        The quantity of electricity consumption estimated for the settlement.
+
     """
     kWh_per_GB = 0.25
 
-    electricity_consumption = data_consumption * kWh_per_GB
+    electricity_consumption = round(data_consumption * kWh_per_GB)
 
     return electricity_consumption
 
 
-def estimate_emissions(electricity_consumption, on_grid, strategy, technology_lut):
+def load_electricity_mix(path):
     """
-    Estimate emissions released from energy consumption.
 
     """
-    if on_grid == 'on_grid':
-        power_type = on_grid
-    else:
-        power_type = on_grid.split('_')[2]
-
-    lut = technology_lut[power_type]
+    electricity_mix = pd.read_csv(path)
+    unique_iso3_ids = electricity_mix['iso3'].unique()
+    electricity_mix = electricity_mix.to_dict('records')
 
     output = {}
 
-    output['carbon_kgs'] = electricity_consumption * lut['carbon_per_kWh']
-    output['nitrogen_oxides_kgs'] = electricity_consumption * lut['nitrogen_oxide_per_kWh']
-    output['sulpher_oxides_kgs'] = electricity_consumption * lut['sulpher_dioxide_per_kWh']
-    output['pm10_kgs'] = electricity_consumption * lut['pm10_per_kWh']
+    for unique_iso3_id in unique_iso3_ids:
+        for item in electricity_mix:
+            if unique_iso3_id == item['iso3']:
+                output[unique_iso3_id] = item
 
     return output
 
@@ -228,11 +286,35 @@ def estimate_emissions(electricity_consumption, on_grid, strategy, technology_lu
 if __name__ == '__main__':
 
     technology_lut = {
-        'on_grid': {
+        'oil': {
             'carbon_per_kWh': 0.5, #kgs of carbon per kWh
             'nitrogen_oxide_per_kWh':0.00009, #kgs of nitrogen oxide (NOx) per kWh
             'sulpher_dioxide_per_kWh': 0.007, #kgs of sulpher dioxide (SO2) per kWh
             'pm10_per_kWh': 0.002, #kgs of PM10 per kWh
+        },
+        'gas': {
+            'carbon_per_kWh': 0.5, #kgs of carbon per kWh
+            'nitrogen_oxide_per_kWh':0.00009, #kgs of nitrogen oxide (NOx) per kWh
+            'sulpher_dioxide_per_kWh': 0.007, #kgs of sulpher dioxide (SO2) per kWh
+            'pm10_per_kWh': 0.002, #kgs of PM10 per kWh
+        },
+        'coal': {
+            'carbon_per_kWh': 1, #kgs of carbon per kWh
+            'nitrogen_oxide_per_kWh':0.0001, #kgs of nitrogen oxide (NOx) per kWh
+            'sulpher_dioxide_per_kWh': 0.01, #kgs of sulpher dioxide (SO2) per kWh
+            'pm10_per_kWh': 0.01, #kgs of PM10 per kWh
+        },
+        'nuclear': {
+            'carbon_per_kWh': 0.5, #kgs of carbon per kWh
+            'nitrogen_oxide_per_kWh':0.00009, #kgs of nitrogen oxide (NOx) per kWh
+            'sulpher_dioxide_per_kWh': 0.007, #kgs of sulpher dioxide (SO2) per kWh
+            'pm10_per_kWh': 0.002, #kgs of PM10 per kWh
+        },
+        'hydro': {
+            'carbon_per_kWh': 0.01, #kgs of carbon per kWh
+            'nitrogen_oxide_per_kWh':0.0000009, #kgs of nitrogen oxide (NOx) per kWh
+            'sulpher_dioxide_per_kWh': 0.00007, #kgs of sulpher dioxide (SO2) per kWh
+            'pm10_per_kWh': 0.00002, #kgs of PM10 per kWh
         },
         'diesel': {
             'carbon_per_kWh': 0.5, #kgs of carbon per kWh
@@ -240,12 +322,21 @@ if __name__ == '__main__':
             'sulpher_dioxide_per_kWh': 0.007, #kgs of sulpher dioxide (SO2) per kWh
             'pm10_per_kWh': 0.002, #kgs of PM10 per kWh
         },
-        'solar': {
+        'renewables': {
             'carbon_per_kWh': 0.1, #kgs of carbon per kWh
             'nitrogen_oxide_per_kWh':0.000001, #kgs of nitrogen oxide (NOx) per kWh
             'sulpher_dioxide_per_kWh': 0.0001, #kgs of sulpher dioxide (SO2) per kWh
             'pm10_per_kWh': 0.00001, #kgs of PM10 per kWh
         }
+    }
+
+    energy_costs = {
+        'oil_usd_kwh': 0.1,
+        'gas_usd_kwh': 0.1,
+        'coal_usd_kwh': 0.1,
+        'nuclear_usd_kwh': 0.1,
+        'hydro_usd_kwh': 0.1,
+        'renewables_usd_kwh': 0.1,
     }
 
     # countries = find_country_list(['Africa'])
@@ -267,8 +358,20 @@ if __name__ == '__main__':
         'solar'
     ]
 
+    filename = 'electricity_mix.csv'
+    path = os.path.join(DATA_RAW, 'bp_statistical_review', filename)
+
+    global_electricity_mix = load_electricity_mix(path)
+
     for country in countries:
 
         print('Working on {}'.format(country['iso3']))
 
-        run_country(country, strategies, technology_lut)
+        filename = 'settlement_data.csv'
+        path = os.path.join(DATA_INTERMEDIATE, country['iso3'], 'settlements', filename)
+        settlements = pd.read_csv(path)#[:50]
+        settlements = process_settlements(settlements)
+
+        electricity_mix = global_electricity_mix[country['iso3']]
+
+        run_country(country, settlements, strategies, technology_lut, electricity_mix, energy_costs)
