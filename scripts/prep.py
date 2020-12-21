@@ -13,12 +13,12 @@ import geopandas as gpd
 import random
 import pyproj
 from shapely.geometry import Point, LineString, Polygon, MultiPolygon, shape, mapping, box
-from shapely.ops import unary_union, transform #nearest_points,
+from shapely.ops import unary_union, transform, nearest_points
 import rasterio
 # import networkx as nx
 # from rasterio.warp import calculate_default_transform, reproject, Resampling
 from rasterio.mask import mask
-from rasterstats import zonal_stats, gen_zonal_stats
+from rasterstats import zonal_stats, gen_zonal_stats, point_query
 # import unrasterize
 
 random.seed(1)
@@ -402,8 +402,8 @@ def get_regional_data(country):
 
     path_output = os.path.join(DATA_INTERMEDIATE, iso3, 'regions', 'regional_data.csv')
 
-    if os.path.exists(path_output):
-        return
+    # if os.path.exists(path_output):
+    #     return
 
     print('Getting regional data')
 
@@ -412,7 +412,7 @@ def get_regional_data(country):
     regions = gpd.read_file(path_input, crs='epsg:4326')#[:5]
     regions = regions.to_crs('epsg:3857') #need to be this crs for get_coverage
 
-    coverage = get_coverage(country, regions)
+    coverage = get_regional_coverage(country, regions)
     coverage_lut = convert_coverage_to_lookup(country, coverage)
 
     path_night_lights = os.path.join(DATA_INTERMEDIATE, iso3, 'night_lights.tif')
@@ -485,7 +485,7 @@ def convert_coverage_to_lookup(country, coverage):
     return output
 
 
-def get_coverage(country, regions):
+def get_regional_coverage(country, regions):
     """
     Get coverage by technology.
 
@@ -500,7 +500,7 @@ def get_coverage(country, regions):
     regional_level = country['regional_level']
     GID_level = 'GID_{}'.format(regional_level)
 
-    filename = 'coverage_lut.csv'
+    filename = 'regional_coverage_lut.csv'
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'coverage')
     if not os.path.exists(folder):
         os.makedirs(folder)
@@ -571,6 +571,8 @@ def get_coverage(country, regions):
 
     output = pd.DataFrame(output)
     output.to_csv(path_output, index=False)
+
+    output = output.to_dict('records')
 
     return output
 
@@ -670,7 +672,7 @@ def generate_settlement_layer(country):
     filename = 'regions_{}_{}.shp'.format(regional_level, iso3)
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'regions')
     path = os.path.join(folder, filename)
-    regions = gpd.read_file(path, crs="epsg:4326")
+    regions = gpd.read_file(path, crs="epsg:4326")#[:1]
     regions = regions.loc[regions.is_valid]
 
     path_settlements = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements.tif')
@@ -683,6 +685,11 @@ def generate_settlement_layer(country):
         os.makedirs(folder_tifs)
 
     for idx, region in regions.iterrows():
+
+        path_output = os.path.join(folder_tifs, region[GID_level] + '.tif')
+
+        if os.path.exists(path_output):
+            continue
 
         bbox = region['geometry'].envelope
 
@@ -700,14 +707,12 @@ def generate_settlement_layer(country):
                         "transform": out_transform,
                         "crs": 'epsg:4326'})
 
-        path_output = os.path.join(folder_tifs, region[GID_level] + '.tif')
-
         with rasterio.open(path_output, "w", **out_meta) as dest:
                 dest.write(out_img)
 
-    nodes = find_nodes(country, regions)
-
+    nodes = find_settlements(country, regions)
     nodes = gpd.GeoDataFrame.from_features(nodes, crs='epsg:4326')
+    # nodes.to_file(os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', 'test.shp'))
 
     bool_list = nodes.intersects(regions['geometry'].unary_union)
     nodes = pd.concat([nodes, bool_list], axis=1)
@@ -717,6 +722,9 @@ def generate_settlement_layer(country):
 
     for idx1, region in regions.iterrows():
 
+        # if not region['GID_2'] == 'IDN.9.2_1':
+        #     continue
+
         seen = set()
         for idx2, node in nodes.iterrows():
             if node['geometry'].intersects(region['geometry']):
@@ -725,6 +733,7 @@ def generate_settlement_layer(country):
                         'type': 'Feature',
                         'geometry': mapping(node['geometry']),
                         'properties': {
+                            'node_id': node['id'],
                             'id': idx1,
                             'GID_0': region['GID_0'],
                             GID_level: region[GID_level],
@@ -739,6 +748,7 @@ def generate_settlement_layer(country):
                 {
                     'geometry': item['geometry'],
                     'properties': {
+                        'node_id': item['properties']['node_id'],
                         'id': item['properties']['id'],
                         'GID_0':item['properties']['GID_0'],
                         GID_level: item['properties'][GID_level],
@@ -754,6 +764,8 @@ def generate_settlement_layer(country):
     settlements['lon'] = round(settlements['geometry'].x, 5)
     settlements['lat'] = round(settlements['geometry'].y, 5)
 
+    settlements['id'] = (settlements['lon'].astype(str) + ',' + settlements['lat'].astype(str))
+
     settlements = settlements.drop_duplicates(subset=['lon', 'lat'])
 
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements')
@@ -763,9 +775,9 @@ def generate_settlement_layer(country):
     return
 
 
-def find_nodes(country, regions):
+def find_settlements(country, regions):
     """
-    Find key nodes.
+    Find key settlements.
 
     """
     iso3 = country['iso3']
@@ -781,13 +793,17 @@ def find_nodes(country, regions):
 
     for idx, region in regions.iterrows():
 
-        path = os.path.join(folder_tifs, region[GID_level] + '.tif')
+        # if not region['GID_2'] == 'IDN.9.2_1':
+        #     continue
 
-        with rasterio.open(path) as src: # convert raster to pandas geodataframe
+        path_raster = os.path.join(folder_tifs, region[GID_level] + '.tif')
+
+        with rasterio.open(path_raster) as src: # convert raster to pandas geodataframe
             data = src.read()
             data[data < threshold] = 0
             data[data >= threshold] = 1
             polygons = rasterio.features.shapes(data, transform=src.transform)
+
             shapes_df = gpd.GeoDataFrame.from_features(
                 [{'geometry': poly, 'properties':{'value':value}}
                     for poly, value in polygons if value > 0], crs='epsg:4326'
@@ -808,12 +824,12 @@ def find_nodes(country, regions):
         if len(shapes_df) == 0:
             continue
 
-        nodes = gpd.overlay(shapes_df, gpd_region, how='intersection')
+        poly_nodes = gpd.overlay(shapes_df, gpd_region, how='intersection')
 
         results = []
 
-        for idx, node in nodes.iterrows():
-            pop = zonal_stats(node['geometry'], path, stats=['sum'])
+        for idx, node in poly_nodes.iterrows():
+            pop = zonal_stats(node['geometry'], path_raster, stats=['sum'])
             if not pop[0]['sum'] == None and pop[0]['sum'] > settlement_size:
                 results.append({
                     'geometry': node['geometry'],
@@ -823,7 +839,7 @@ def find_nodes(country, regions):
                     },
                 })
 
-        nodes = gpd.GeoDataFrame.from_features(
+        poly_nodes = gpd.GeoDataFrame.from_features(
             [{
                 'geometry': item['geometry'],
                 'properties': {
@@ -835,25 +851,28 @@ def find_nodes(country, regions):
             ],
             crs='epsg:4326'
         )
+        # poly_nodes.to_file(os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', 'test2.shp'))
+        poly_nodes = poly_nodes.drop_duplicates()
 
-        nodes = nodes.drop_duplicates()
-
-        if len(nodes) == 0:
+        if len(poly_nodes) == 0:
             continue
 
-        nodes.loc[(nodes['sum'] >= 20000), 'type'] = '>20k'
-        nodes.loc[(nodes['sum'] <= 10000) | (nodes['sum'] < 20000), 'type'] = '10-20k'
-        nodes.loc[(nodes['sum'] <= 5000) | (nodes['sum'] < 10000), 'type'] = '5-10k'
-        nodes.loc[(nodes['sum'] <= 1000) | (nodes['sum'] < 5000), 'type'] = '1-5k'
-        nodes.loc[(nodes['sum'] <= 500) | (nodes['sum'] < 1000), 'type'] = '0.5-1k'
-        nodes.loc[(nodes['sum'] <= 500), 'type'] = '<0.5k'
-        nodes = nodes.dropna()
+        poly_nodes.loc[(poly_nodes['sum'] >= 20000), 'type'] = '>20k'
+        poly_nodes.loc[(poly_nodes['sum'] <= 10000) | (poly_nodes['sum'] < 20000), 'type'] = '10-20k'
+        poly_nodes.loc[(poly_nodes['sum'] <= 5000) | (poly_nodes['sum'] < 10000), 'type'] = '5-10k'
+        poly_nodes.loc[(poly_nodes['sum'] <= 1000) | (poly_nodes['sum'] < 5000), 'type'] = '1-5k'
+        poly_nodes.loc[(poly_nodes['sum'] <= 500) | (poly_nodes['sum'] < 1000), 'type'] = '0.5-1k'
+        poly_nodes.loc[(poly_nodes['sum'] <= 500), 'type'] = '<0.5k'
+        poly_nodes = poly_nodes.dropna()
 
-        for idx, item in nodes.iterrows():
+        for idx, item in poly_nodes.iterrows():
             if item['sum'] > 0:
+                geom = item['geometry'].centroid #return_highest_density_point(item, path_raster)
+                x, y = list(geom.coords)[0]
                 interim.append({
-                        'geometry': item['geometry'].centroid,
+                        'geometry': geom,
                         'properties': {
+                            'id': '{},{}'.format(x, y),
                             GID_level: region[GID_level],
                             'sum': item['sum'],
                             'type': item['type'],
@@ -861,6 +880,52 @@ def find_nodes(country, regions):
                 })
 
     return interim
+
+
+# def return_highest_density_point(item, path_raster):
+#     """
+#     Return the most densly populated point in in the polygon.
+
+#     """
+
+#     with rasterio.open(path_raster) as src:
+#         ds = src.read(1)
+#         # print(ds)
+#         row, col = np.unravel_index(np.argmax(ds, axis=None), ds.shape)
+#         maxval = ds[row, col]
+#         x, y = src.xy(row, col)
+#         print(x, y, maxval)
+
+#     return 0
+
+
+def process_major_settlement_layer(country):
+    """
+    Extracts major settlements over 50,000 people. This value has been
+    selected to match up with the approach taken within the OnSSET model.
+
+    """
+    iso3 = country['iso3']
+
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements')
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+    path_output = os.path.join(folder, 'major_settlements.shp')
+
+    # if os.path.exists(path_output):
+    #     return
+
+    print('Extracting major settlement layer ready to export')
+
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements')
+    path = os.path.join(folder, 'settlements.shp')
+    settlements = gpd.read_file(path, crs='epsg:4326')
+
+    major_settlements = settlements.loc[settlements['population'] >= 50000]
+
+    major_settlements.to_file(path_output)
+
+    return
 
 
 def get_settlement_data(country):
@@ -879,18 +944,26 @@ def get_settlement_data(country):
 
     path_output = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', 'settlement_data.csv')
 
-    if os.path.exists(path_output):
-        return
+    # if os.path.exists(path_output):
+    #     return
 
     print('Getting settlement data')
 
     path_elec_dist = os.path.join(DATA_INTERMEDIATE, iso3, 'electricity_dist.tif')
     path_night_lights = os.path.join(DATA_INTERMEDIATE, iso3, 'night_lights.tif')
 
+    filename = 'major_settlements.shp'
+    path_input = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', filename)
+    major_settlements = gpd.read_file(path_input, crs='epsg:4326')
+    major_settlements = major_settlements.to_crs('epsg:3857')
+
     filename = 'settlements.shp'
     path_input = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', filename)
-    settlements = gpd.read_file(path_input, crs='epsg:4326')#[:5]
+    settlements = gpd.read_file(path_input, crs='epsg:4326')#[:1]
     settlements = settlements.to_crs('epsg:3857') #need to be this crs for get_coverage
+
+    coverage = get_settlement_coverage(country, settlements)
+    coverage_lut = convert_coverage_to_settlement_lookup(coverage)
 
     results = []
 
@@ -928,6 +1001,8 @@ def get_settlement_data(country):
             luminosity_mean = zonal_stats(
                 buffer, array, stats=['mean', 'sum', 'max'], affine=affine, nodata=-999)[0]
 
+        distance_km = find_distance_to_major_settlement(country, major_settlements, settlement)
+
         results.append({
             'GID_0': settlement['GID_0'],
             'GID_level': settlement[GID_level],
@@ -939,12 +1014,130 @@ def get_settlement_data(country):
             'luminosity_mean': luminosity_mean['mean'],
             'luminosity_sum': luminosity_mean['sum'],
             'luminosity_max': luminosity_mean['max'],
+            'travel_dist': distance_km,
+            'coverage_2G_percent': coverage_lut[settlement['id']]['2G'],
+            'coverage_3G_percent': coverage_lut[settlement['id']]['3G'],
+            'coverage_4G_percent': coverage_lut[settlement['id']]['4G'],
+            'coverage_5G_percent': coverage_lut[settlement['id']]['5G'],
         })
 
     results_df = pd.DataFrame(results)
     results_df.to_csv(path_output, index=False)
 
     return
+
+
+def get_settlement_coverage(country, settlements):
+    """
+    Get coverage by technology.
+
+    Parameters
+    ----------
+    country : string
+        Three digit ISO country code.
+
+    """
+    iso3 = country['iso3']
+    iso2 = country['iso2']
+
+    filename = 'settlement_coverage_lut.csv'
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'coverage')
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+
+    path_output = os.path.join(folder, filename)
+
+    # if os.path.exists(path_output):
+    #     output = pd.read_csv(path_output)
+    #     output = output.to_dict('records')
+    #     return output
+
+    technologies = ['2G', '3G', '4G', '5G']
+
+    output = []
+
+    for idx, settlement in settlements.iterrows():
+
+        # if not settlement['id'] == '107.61141,-7.09968':
+        #     continue
+        # print(settlement)
+        interim = {}
+
+        for tech in technologies:
+
+            folder_nm = 'MCE_{}'.format(tech)
+            folder = os.path.join(DATA_RAW, 'MCE 2020', 'Data_MCE', 'ByCountry', folder_nm)
+            filename = 'MCE_{}{}_2020.tif'.format(iso2, tech)
+            path_input = os.path.join(folder, filename)
+
+            if os.path.exists(path_input):
+                path_coverage = path_input
+            else:
+                folder_nm = 'OCI_{}'.format(tech)
+                folder = os.path.join(DATA_RAW, 'MCE 2020', 'Data_OCI', 'ByCountry', folder_nm)
+                filename = 'OCI_{}{}_2020.tif'.format(iso2, tech)
+                path_input = os.path.join(folder, filename)
+
+                if os.path.exists(path_input):
+                    path_coverage = path_input
+                else:
+                    interim[tech] = 0
+                    continue
+
+            with rasterio.open(path_coverage) as src:
+                affine = src.transform
+                array = src.read(1)
+                array[array <= 0] = 0
+                array[array > 1] = 1
+
+                total = point_query(
+                    settlement['geometry'],
+                    array,
+                    # stats=['sum', 'count'],
+                    affine=affine,
+                    nodata=-999
+                    )[0]
+                # print(results)
+                # total = results['sum']
+                # print(total)
+                if total is not None:
+                    if total > 0:
+                        interim[tech] = 1
+                    else:
+                        interim[tech] = 0
+                else:
+                    interim[tech] = 0
+                # print(interim)
+        output.append({
+            'id': settlement['id'],
+            '2G': interim['2G'],
+            '3G': interim['3G'],
+            '4G': interim['4G'],
+            '5G': interim['5G']
+            })
+
+    output = pd.DataFrame(output)
+    output.to_csv(path_output, index=False)
+
+    return output
+
+
+def convert_coverage_to_settlement_lookup(coverage):
+    """
+    Takes a list of dicts and returns a dict for each access.
+
+    """
+    output = {}
+
+    for idx, item in coverage.iterrows():
+        output[item['id']] = {
+            '2G': item['2G'],
+            '3G': item['3G'],
+            '4G': item['4G'],
+            '5G': item['5G']
+        }
+
+    return output
 
 
 def get_area(region):
@@ -959,6 +1152,29 @@ def get_area(region):
     return area_km
 
 
+def find_distance_to_major_settlement(country, major_settlements, settlement):
+    """
+    Finds the distance to the nearest major settlement.
+
+    """
+    nearest = nearest_points(settlement['geometry'], major_settlements.unary_union)[1]
+
+    geom = LineString([
+                (
+                    settlement['geometry'].coords[0][0],
+                    settlement['geometry'].coords[0][1]
+                ),
+                (
+                    nearest.coords[0][0],
+                    nearest.coords[0][1]
+                ),
+            ])
+
+    distance_km = round(geom.length / 1e3)
+
+    return distance_km
+
+
 if __name__ == '__main__':
 
     # countries = find_country_list(['Africa'])
@@ -966,11 +1182,11 @@ if __name__ == '__main__':
     countries = [
         {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2, #'regional_nodes_level': 3,
             'region': 'LAT', 'pop_density_km2': 100, 'settlement_size': 100,
-            'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
+           # 'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
         },
         {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
             'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
-            'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
+            # 'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
         },
     ]
 
@@ -978,19 +1194,21 @@ if __name__ == '__main__':
 
         print('Working on {}'.format(country['iso3']))
 
-        process_country_shapes(country)
+        # process_country_shapes(country)
 
-        process_regions(country)
+        # process_regions(country)
 
-        process_settlement_layer(country)
+        # process_settlement_layer(country)
 
-        process_electricity_layer(country)
+        # process_electricity_layer(country)
 
-        process_night_lights(country)
+        # process_night_lights(country)
 
-        get_regional_data(country)
+        # get_regional_data(country)
 
         generate_settlement_layer(country)
+
+        process_major_settlement_layer(country)
 
         get_settlement_data(country)
 
