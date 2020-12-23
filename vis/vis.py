@@ -1,5 +1,5 @@
 """
-Visualize results.
+Visualize demand.
 
 """
 import os
@@ -7,9 +7,10 @@ import configparser
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-import matplotlib.pyplot as plt
-import seaborn as sns
 import contextily as ctx
+import matplotlib.pyplot as plt
+import matplotlib.colors
+from matplotlib import cm
 
 CONFIG = configparser.ConfigParser()
 CONFIG.read(os.path.join(os.path.dirname(__file__), '..', 'scripts', 'script_config.ini'))
@@ -20,203 +21,117 @@ DATA_INTERMEDIATE = os.path.join(BASE_PATH, 'intermediate')
 RESULTS = os.path.join(BASE_PATH, '..', 'results')
 VIS = os.path.join(BASE_PATH, '..', 'vis', 'figures')
 
+if not os.path.exists(VIS):
+    os.makedirs(VIS)
 
-def get_regional_shapes():
+def generate_settlement_plot(countries, categories, filename_out):
     """
+    Generate a set of visualizing settlement distribution and size.
+
     """
-    output = []
+    fig, axs = plt.subplots(2, figsize=(12, 12))
 
-    for item in os.listdir(DATA_INTERMEDIATE):#[:2]:
-        if len(item) == 3: # we only want iso3 code named folders
+    for country in countries:
 
-            filename_gid1 = 'regions_1_{}.shp'.format(item)
-            path_gid1 = os.path.join(DATA_INTERMEDIATE, item, 'regions', filename_gid1)
+        iso3 = country[0]
+        x = country[1]
+        plot_title = country[2]
+        regional_level = country[3]
 
-            filename_gid2 = 'regions_2_{}.shp'.format(item)
-            path_gid2 = os.path.join(DATA_INTERMEDIATE, item, 'regions', filename_gid2)
+        outline_path = os.path.join(DATA_INTERMEDIATE, iso3, 'national_outline.shp')
+        country_outline = gpd.read_file(outline_path, crs='epsg:4326')
 
-            if os.path.exists(path_gid2):
-                data = gpd.read_file(path_gid2)
-                data['GID_id'] = data['GID_2']
-                data = data.to_dict('records')
-            elif os.path.exists(path_gid1):
-                data = gpd.read_file(path_gid1)
-                data['GID_id'] = data['GID_1']
-                data = data.to_dict('records')
-            else:
-               print('No shapefiles for {}'.format(item))
-               continue
+        filename = 'regions_{}_{}.shp'.format(regional_level, iso3)
+        regions_path = os.path.join(DATA_INTERMEDIATE, iso3, 'regions', filename)
+        regions = gpd.read_file(regions_path)
+        regions.plot(facecolor="none", edgecolor='lightgrey', lw=1, ax=axs[x])
 
-            for datum in data:
-                output.append({
-                    'geometry': datum['geometry'],
-                    'properties': {
-                        'GID_id': datum['GID_id'],
-                    },
-                })
+        data_path = os.path.join(RESULTS, iso3, 'results.csv')
+        data = pd.read_csv(data_path)
+        data = gpd.GeoDataFrame(data, geometry=gpd.points_from_xy(data.lon, data.lat), crs='epsg:4326')
 
-    output = gpd.GeoDataFrame.from_features(output, crs='epsg:4326')
+        data.query(categories[5][0]).plot(color='gainsboro', markersize=0.5, ax=axs[x])
+        data.query(categories[4][0]).plot(color='lightpink', markersize=1, ax=axs[x])
+        data.query(categories[3][0]).plot(color='orangered', markersize=2, ax=axs[x])
+        data.query(categories[2][0]).plot(color='red', markersize=4, ax=axs[x])
+        data.query(categories[1][0]).plot(color='maroon', markersize=6, ax=axs[x])
+        data.query(categories[0][0]).plot(color='black', markersize=8, ax=axs[x])
 
-    return output
+        axs[x].legend([
+            categories[5][1],
+            categories[4][1],
+            categories[3][1],
+            categories[2][1],
+            categories[1][1],
+            categories[0][1],
+        ], prop={'size': 10})
 
+        axs[x].set_title(plot_title)
 
-def plot_regions_by_geotype(data, regions):
-    """
-    """
-    data = data.loc[data['scenario'] == 'baseline']
-    data = data.loc[data['constellation'] == 'Starlink']
-    data['pop_density_km2'] = round(data['pop_density_km2'])
-    n = len(regions)
+        bbox = country_outline.bounds
 
-    data = data[['GID_id', 'pop_density_km2']]
-    regions = regions[['GID_id', 'geometry']]
+        axs[x].set_xlim([bbox['minx'][0], bbox['maxx'][0]])
+        axs[x].set_ylim([bbox['miny'][0], bbox['maxy'][0]])
 
-    regions = regions.merge(data, left_on='GID_id', right_on='GID_id')
-    regions.reset_index(drop=True, inplace=True)
-
-    metric = 'pop_density_km2'
-
-    bins = [-1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 111607]
-    labels = [
-        '<5 $\mathregular{km^2}$',
-        '5-10 $\mathregular{km^2}$',
-        '10-15 $\mathregular{km^2}$',
-        '15-20 $\mathregular{km^2}$',
-        '20-25 $\mathregular{km^2}$',
-        '25-30 $\mathregular{km^2}$',
-        '30-35 $\mathregular{km^2}$',
-        '35-40 $\mathregular{km^2}$',
-        '40-45 $\mathregular{km^2}$',
-        '>45 $\mathregular{km^2}$'
-    ]
-
-    regions['bin'] = pd.cut(
-        regions[metric],
-        bins=bins,
-        labels=labels
-    )
-
-    fig, ax = plt.subplots(1, 1, figsize=(15, 6))
-
-    minx, miny, maxx, maxy = regions.total_bounds
-    ax.set_xlim(minx+10, maxx)
-    ax.set_ylim(miny-5, maxy)
-
-    regions.plot(column='bin', ax=ax, cmap='inferno_r',
-    linewidth=0, legend=True, edgecolor='grey')
-
-    ctx.add_basemap(ax, crs=regions.crs, source=ctx.providers.CartoDB.Voyager)
-
-    fig.suptitle('Population Density by Sub-National Region (n={})'.format(n))
+        ctx.add_basemap(axs[x], crs=data.crs.to_string())
 
     fig.tight_layout()
-    fig.savefig(os.path.join(VIS, 'region_by_pop_density.png'))
 
-    plt.close(fig)
-
-
-def plot_capacity_per_user(data, regions):
-    """
-
-    """
-    n = len(regions)
-    data = data.loc[data['scenario'] == 'baseline']
-
-    regions = regions[['GID_id', 'geometry']]#[:1000]
-
-    constellations = data['constellation'].unique()#[:1]
-
-    fig, axs = plt.subplots(3, 1, figsize=(10, 12)) #width height
-
-    i = 0
-
-    for constellation in list(constellations):
-
-        subset = data.loc[data['constellation'] == constellation]
-
-        subset = subset[['GID_id', 'per_user_capacity']]
-
-        regions_merged = regions.merge(subset, left_on='GID_id', right_on='GID_id')
-        regions_merged.reset_index(drop=True, inplace=True)
-
-        metric = 'per_user_capacity'
-
-        bins = [-1, 5, 10, 25, 50, 100, 150, 200, 250, 300, 1e9]
-        labels = [
-            '<5 Mbps',
-            '5-10 Mbps',
-            '10-25 Mbps',
-            '25-50 Mbps',
-            '50-100 Mbps',
-            '100-150 Mbps',
-            '150-200 Mbps',
-            '200-250 Mbps',
-            '250-300 Mbps',
-            '>300 Mbps',
-        ]
-        regions_merged['bin'] = pd.cut(
-            regions_merged[metric],
-            bins=bins,
-            labels=labels
-        )#.fillna('<20')
-
-        minx, miny, maxx, maxy = regions_merged.total_bounds
-        axs[i].set_xlim(minx, maxx)
-        axs[i].set_ylim(miny, maxy)
-
-        regions_merged.plot(column='bin', ax=axs[i], cmap='inferno_r', linewidth=0, legend=True)
-
-        ctx.add_basemap(axs[i], crs=regions_merged.crs, source=ctx.providers.CartoDB.Voyager)
-
-        letter = get_letter(constellation)
-
-        axs[i].set_title("({}) {} Per User Capacity Based on 10 Percent Adoption (n={})".format(
-            letter, constellation, n))
-
-        i += 1
-
-    fig.tight_layout()
-    fig.savefig(os.path.join(VIS, 'per_user_capacity_panel.png'))
-
-    plt.close(fig)
-
-
-def get_letter(constellation):
-    """
-    Return the correct letter.
-
-    """
-    if constellation == 'Starlink':
-        return 'A'
-    elif constellation == 'OneWeb':
-        return 'B'
-    elif constellation == 'Telesat':
-        return 'C'
-    else:
-        print('Did not recognize constellation')
+    plt.savefig(os.path.join(VIS, filename_out))
 
 
 if __name__ == '__main__':
 
-    if not os.path.exists(VIS):
-        os.makedirs(VIS)
+    countries = [
+        ('PER', 0, 'Peru - Settlement Sizes', 2),
+        ('IDN', 1, 'Indonesia - Settlement Sizes', 2),
+    ]
 
-    print('Loading regional data by pop density geotype')
-    path = os.path.join(RESULTS, 'results.csv')
-    data = pd.read_csv(path)#[:1000]
+    categories = [
+        ('20000 <= population', '>20k'),
+        ('10000 <= population < 20000', '<20k'),
+        ('5000 <= population < 10000', '<10k'),
+        ('1000 <= population < 5000', '<5k'),
+        ('500 <= population < 1000', '<1k'),
+        ('0 <= population < 500', '<0.5k'),
+    ]
 
-    print('Loading shapes')
-    path = os.path.join(DATA_INTERMEDIATE, 'all_regional_shapes.shp')
-    if not os.path.exists(path):
-        shapes = get_regional_shapes()
-        shapes.to_file(path)
-    else:
-        shapes = gpd.read_file(path, crs='epsg:4326')#[:1000]
+    filename_out = 'settlements.png'
 
-    print('Plotting population density per area')
-    plot_regions_by_geotype(data, shapes)
+    generate_settlement_plot(countries, categories, filename_out)
 
-    print('Plotting capacity per user')
-    plot_capacity_per_user(data, shapes)
+    countries = [
+        ('PER', 0, 'Peru - Phone Adoption', 2),
+        ('IDN', 1, 'Indonesia - Phone Adoption', 2),
+    ]
 
-    print('Complete')
+    categories = [
+        ('20000 <= phones', '>20k'),
+        ('10000 <= phones < 20000', '<20k'),
+        ('5000 <= phones < 10000', '<10k'),
+        ('1000 <= phones < 5000', '<5k'),
+        ('500 <= phones < 1000', '<1k'),
+        ('0 <= phones < 500', '<0.5k'),
+    ]
+
+    filename_out = 'phone_adoption.png'
+
+    generate_settlement_plot(countries, categories, filename_out)
+
+    countries = [
+        ('PER', 0, 'Peru - Smartphone Adoption', 2),
+        ('IDN', 1, 'Indonesia - Smartphone Adoption', 2),
+    ]
+
+    categories = [
+        ('20000 <= smartphones', '>20k'),
+        ('10000 <= smartphones < 20000', '<20k'),
+        ('5000 <= smartphones < 10000', '<10k'),
+        ('1000 <= smartphones < 5000', '<5k'),
+        ('500 <= smartphones < 1000', '<1k'),
+        ('0 <= smartphones < 500', '<0.5k'),
+    ]
+
+    filename_out = 'smartphone_adoption.png'
+
+    generate_settlement_plot(countries, categories, filename_out)
