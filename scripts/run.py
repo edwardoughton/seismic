@@ -10,7 +10,8 @@ import pandas as pd
 from tqdm import tqdm
 from random import random, uniform
 
-from costs import calculate_electricity_cost
+from power import elec_consumption
+from costs import electricity_cost
 from emissions import estimate_emissions
 
 CONFIG = configparser.ConfigParser()
@@ -22,7 +23,7 @@ DATA_INTERMEDIATE = os.path.join(BASE_PATH, 'intermediate')
 RESULTS = os.path.join(BASE_PATH, '..', 'results')
 
 
-def run_country(country, settlements, strategies, technology_lut, electricity_mix, energy_costs):
+def run_country(country, settlements, strategies, tech_lut, mix, energy_costs):
     """
 
     """
@@ -44,23 +45,29 @@ def run_country(country, settlements, strategies, technology_lut, electricity_mi
 
     for idx, settlement in settlements.iterrows():
 
+        # if not settlement['population'] > 20000:
+        #     continue
+
+        on_grid = settlement['on_grid']
+        dist = settlement['travel_dist']
+
         phones = estimate_phone_adoption(settlement, subscribers_to_allocate)
 
         smartphones = estimate_smartphone_adoption(phones)
 
         active_users = estimate_active_smarthpone_users(smartphones)
 
-        data_consumption = estimate_data_consumption(active_users)
+        data_consumption_GB = estimate_data_consumption(active_users)
 
         for strategy in strategies:
 
-            electricity_consumption = estimate_electricity_consumption(data_consumption, strategy)
+            settlement = allocate_site_power_type(settlement, strategy)
 
-            cost = calculate_electricity_cost(electricity_consumption, strategy,
-                electricity_mix, energy_costs)
+            elec = elec_consumption(data_consumption_GB, strategy)
 
-            emissions = estimate_emissions(electricity_consumption, settlement['on_grid'],
-                strategy, electricity_mix, technology_lut)
+            capex, opex = electricity_cost(elec, on_grid, strategy, mix, energy_costs, dist)
+
+            emissions = estimate_emissions(elec, on_grid, strategy, mix, tech_lut)
 
             output.append({
                 'GID_0': settlement['GID_0'],
@@ -75,10 +82,10 @@ def run_country(country, settlements, strategies, technology_lut, electricity_mi
                 'phones_perc': round(phones / settlement['population'] * 100),
                 'smartphones': smartphones,
                 'smartphones_perc': round(smartphones / settlement['population'] * 100),
-                'active_users': active_users,
-                'data_consumption_GB': data_consumption,
-                'electricity_consumption_kWh': electricity_consumption,
-                'cost_usd': cost,
+                'data_consumption_GB': sum(data_consumption_GB.values()),
+                'electricity_consumption_kWh': elec,
+                'capex_usd': capex,
+                'opex_usd': opex,
                 'carbon_kgs': emissions['carbon_kgs'],
                 'nitrogen_oxides_kgs': emissions['nitrogen_oxides_kgs'],
                 'sulpher_oxides_kgs': emissions['sulpher_oxides_kgs'],
@@ -88,17 +95,15 @@ def run_country(country, settlements, strategies, technology_lut, electricity_mi
     output = pd.DataFrame(output)
     output.to_csv(path_out, index=False)
 
+    output = output[['strategy', 'population', 'phones', 'smartphones', 'data_consumption_GB',
+        'electricity_consumption_kWh', 'capex_usd', 'opex_usd', 'carbon_kgs',
+        'nitrogen_oxides_kgs', 'sulpher_oxides_kgs', 'pm10_kgs']]
+    output = output.groupby(['strategy']).sum()
+
+    path_out = os.path.join(RESULTS, iso3, 'aggregate_results.csv')
+    output.to_csv(path_out, index=True)
+
     return
-
-
-def get_country_electricity_mix(country, electricity_mix):
-    """
-    Get the country electricity mix.
-
-    """
-    iso3 = country['iso3']
-
-    return country_elec_mix
 
 
 def get_total_unique_subscribers(country):
@@ -211,9 +216,40 @@ def estimate_active_smarthpone_users(smartphones):
         The total number of estimated active_users for the settlement.
 
     """
-    active_user_rate = 0.1
+    hourly_use = {
+        0:	0.005,
+        1:	0.005,
+        2:	0.005,
+        3:	0.005,
+        4:	0.01,
+        5:	0.02,
+        6:	0.03,
+        7:	0.03,
+        8:	0.1,
+        9:	0.075,
+        10:	0.03,
+        11:	0.03,
+        12:	0.03,
+        13:	0.05,
+        14:	0.075,
+        15:	0.075,
+        16:	0.15,
+        17:	0.1,
+        18:	0.07,
+        19:	0.04,
+        20:	0.03,
+        21:	0.02,
+        22:	0.01,
+        23:	0.005,
+    }
 
-    active_users = smartphones * active_user_rate
+    active_users = {}
+
+    for i in range(0, 24):
+
+        active_user_rate = hourly_use[i]
+
+        active_users[i] = round(smartphones * active_user_rate, 2)
 
     return active_users
 
@@ -236,47 +272,54 @@ def estimate_data_consumption(active_users):
     months = 12
     monthly_data_consumption = 12
 
-    data_consumption = round(active_users * monthly_data_consumption * months)
+    data_consumption_GB = {}
 
-    return data_consumption
+    for key, value in active_users.items():
+
+        data_consumption_GB[key] = round(value * monthly_data_consumption * months)
+
+    return data_consumption_GB
 
 
-def estimate_electricity_consumption(data_consumption, strategy):
+def allocate_site_power_type(settlement, strategy):
     """
-    Estimate annual electricity consumption for this settlement.
-
-    Parameters
-    ----------
-    data_consumption : int
-        The quantity of annual data consumption estimated for the settlement.
-    strategy : string
-        The strategy being implemented.
-
-    Returns
-    -------
-    electricity_consumption : int
-        The quantity of electricity consumption estimated for the settlement.
+    Shifts the site power type based onthe strategy.
 
     """
-    kWh_per_GB = 0.25
+    if strategy == 'baseline':
 
-    electricity_consumption = round(data_consumption * kWh_per_GB)
+        return settlement
 
-    return electricity_consumption
+    elif strategy == 'smart_diesel_generators':
+
+        return settlement
+
+    elif strategy == 'smart_solar':
+
+        return settlement
+
+    elif strategy == 'pure_solar':
+
+        settlement['on_grid'] = 'off_grid_solar'
+
+        return settlement
+
+    else:
+        print('Did not recognize site power type strategy')
 
 
-def load_electricity_mix(path):
+def load_mix(path):
     """
 
     """
-    electricity_mix = pd.read_csv(path)
-    unique_iso3_ids = electricity_mix['iso3'].unique()
-    electricity_mix = electricity_mix.to_dict('records')
+    mix = pd.read_csv(path)
+    unique_iso3_ids = mix['iso3'].unique()
+    mix = mix.to_dict('records')
 
     output = {}
 
     for unique_iso3_id in unique_iso3_ids:
-        for item in electricity_mix:
+        for item in mix:
             if unique_iso3_id == item['iso3']:
                 output[unique_iso3_id] = item
 
@@ -285,7 +328,7 @@ def load_electricity_mix(path):
 
 if __name__ == '__main__':
 
-    technology_lut = {
+    tech_lut = {
         'oil': {
             'carbon_per_kWh': 0.5, #kgs of carbon per kWh
             'nitrogen_oxide_per_kWh':0.00009, #kgs of nitrogen oxide (NOx) per kWh
@@ -346,22 +389,23 @@ if __name__ == '__main__':
             'region': 'SSA', 'pop_density_km2': 25, 'settlement_size': 500,
             'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
         },
-        {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
-            'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
-            'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
-        },
+        # {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
+        #     'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
+        #     'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
+        # },
     ]
 
     strategies = [
         'baseline',
         'smart_diesel_generators',
-        'solar'
+        'smart_solar',
+        'pure_solar'
     ]
 
     filename = 'electricity_mix.csv'
     path = os.path.join(DATA_RAW, 'bp_statistical_review', filename)
 
-    global_electricity_mix = load_electricity_mix(path)
+    global_mix = load_mix(path)
 
     for country in countries:
 
@@ -369,9 +413,9 @@ if __name__ == '__main__':
 
         filename = 'settlement_data.csv'
         path = os.path.join(DATA_INTERMEDIATE, country['iso3'], 'settlements', filename)
-        settlements = pd.read_csv(path)#[:50]
+        settlements = pd.read_csv(path)#[:10]
         settlements = process_settlements(settlements)
 
-        electricity_mix = global_electricity_mix[country['iso3']]
+        mix = global_mix[country['iso3']]
 
-        run_country(country, settlements, strategies, technology_lut, electricity_mix, energy_costs)
+        run_country(country, settlements, strategies, tech_lut, mix, energy_costs)
