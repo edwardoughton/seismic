@@ -7,20 +7,22 @@ December 2020
 
 """
 
-def calculate_electricity_cost(electricity_consumption, strategy, electricity_mix, energy_costs):
+def electricity_cost(elec, on_grid, strategy, mix, energy_costs, dist):
     """
     Calculate the cost of electricity consumption.
 
     Parameters
     ----------
-    electricity_consumption : int
+    elec : int
         The quantity of electricity consumption.
     strategy : string
         The strategy being implemented.
-    electricity_mix : list of dicts
+    mix : list of dicts
         Contains the electricity generation mix.
     energy_costs : dict
         Contains the cost per kWh by electricity generation type.
+    dist : int
+        Distance to nearest major settlement.
 
     Returns
     -------
@@ -29,40 +31,38 @@ def calculate_electricity_cost(electricity_consumption, strategy, electricity_mi
 
     """
 
-    if strategy == 'baseline':
+    if on_grid == 'on_grid':
 
-        oil = electricity_consumption * electricity_mix['oil'] * energy_costs['oil']
-        gas = electricity_consumption * electricity_mix['gas'] * energy_costs['gas']
-        coal = electricity_consumption * electricity_mix['coal'] * energy_costs['coal']
-        nuclear = electricity_consumption * electricity_mix['nuclear'] * energy_costs['nuclear']
-        hydro = electricity_consumption * electricity_mix['hydro'] * energy_costs['hydro']
-        renewables = electricity_consumption * electricity_mix['renewables'] * energy_costs['renewables']
+        capex = 0
 
-        cost = oil + gas + coal + nuclear + hydro + renewables
+        oil = elec * mix['oil'] * energy_costs['oil_usd_kwh']
+        gas = elec * mix['gas'] * energy_costs['gas_usd_kwh']
+        coal = elec * mix['coal'] * energy_costs['coal_usd_kwh']
+        nuclear = elec * mix['nuclear'] * energy_costs['nuclear_usd_kwh']
+        hydro = elec * mix['hydro'] * energy_costs['hydro_usd_kwh']
+        renewables = elec * mix['renewables'] * energy_costs['renewables_usd_kwh']
 
-    elif  strategy == 'smart_diesel_generators':
+        opex = oil + gas + coal + nuclear + hydro + renewables
 
-        oil = electricity_consumption * electricity_mix['oil'] * energy_costs['oil']
-        gas = electricity_consumption * electricity_mix['gas'] * energy_costs['gas']
-        coal = electricity_consumption * electricity_mix['coal'] * energy_costs['coal']
-        nuclear = electricity_consumption * electricity_mix['nuclear'] * energy_costs['nuclear']
-        hydro = electricity_consumption * electricity_mix['hydro'] * energy_costs['hydro']
-        renewables = electricity_consumption * electricity_mix['renewables'] * energy_costs['renewables']
+    elif on_grid == 'off_grid_diesel':
 
-        cost = oil + gas + coal + nuclear + hydro + renewables
+        capex = 5000
 
-    elif strategy == 'solar':
+        diesel_price = 1
+        speed = 50 #km/h
+        t = dist / speed #dist in km, t in hours
 
-        oil = electricity_consumption * electricity_mix['oil'] * energy_costs['oil']
-        gas = electricity_consumption * electricity_mix['gas'] * energy_costs['gas']
-        coal = electricity_consumption * electricity_mix['coal'] * energy_costs['coal']
-        nuclear = electricity_consumption * electricity_mix['nuclear'] * energy_costs['nuclear']
-        hydro = electricity_consumption * electricity_mix['hydro'] * energy_costs['hydro']
-        renewables = electricity_consumption * electricity_mix['renewables'] * energy_costs['renewables']
+        opex =  elec * (diesel_price / 3) * (1 + 0.08 * t) + 0.01
 
-        cost = oil + gas + coal + nuclear + hydro + renewables
+    elif on_grid == 'off_grid_solar':
+
+        capex = 5000
+
+        renewables = elec * energy_costs['renewables_usd_kwh']
+
+        opex = renewables
 
     else:
-        print('Cost module did not recognize the stated strategy')
+        print('Cost module did not recognize: {}'.format(strategy))
 
-    return cost
+    return capex, opex
