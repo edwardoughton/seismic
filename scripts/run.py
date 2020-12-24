@@ -389,10 +389,10 @@ if __name__ == '__main__':
             'region': 'SSA', 'pop_density_km2': 25, 'settlement_size': 500,
             'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
         },
-        # {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
-        #     'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
-        #     'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
-        # },
+        {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
+            'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
+            'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
+        },
     ]
 
     strategies = [
