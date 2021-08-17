@@ -1,0 +1,7 @@
+numpy>=1.16.5
+shapely
+fiona
+pyproj>=2.1.3
+rtree>=0.8.3
+geopandas>=0.6.2
+Rtree>=0.8.3
