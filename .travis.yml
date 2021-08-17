@@ -1,0 +1,48 @@
+# language: python
+# python:
+# - "3.7"
+
+# before_install:
+#   - "pip install -U pip"
+#   - "export PYTHONPATH=$PYTHONPATH:$(pwd)"
+#   - sudo apt-get install -y libspatialindex-dev libgeos-dev gdal-bin
+#   # - "pip install -U pip"
+#   # - "python setup.py install"
+
+# install:
+#   - pip install 'pytest>=4.6' pytest-cov coveralls
+#   - python setup.py develop
+#   - pip freeze
+
+# before_script:
+#   - git config --global user.email "edward.oughton@gmail.com"
+#   - git config --global user.name "Edward Oughton"
+
+# script:
+# - pytest --cov india5g --cov-report term-missing
+
+# after_success:
+#   - coveralls
+
+# notifications:
+#   email: false
+
+# dist: xenial   # required for Python >= 3.7
+language: python
+python:
+  - "3.7"
+# command to install dependencies
+before_install:
+  - sudo apt-get install -y libspatialindex-dev libgeos-dev gdal-bin
+
+install:
+  - pip install -r requirements.txt
+  - python setup.py install
+  - pip install pytest
+  - pip install pytest-cov
+  - pip install coveralls
+# command to run tests
+script:
+  - pytest --cov india5g --cov-report term-missing
+after_success:
+  - coveralls
