@@ -280,7 +280,7 @@ def calc_power(transmitter, receivers, interfering_tx, params,
     Calculate the optimal (minimum) power level.
 
     """
-    results = {}
+    results = []
 
     tx_coords = shape(transmitter['geometry'].to_crs('epsg:3857')[0])
     receivers['geometry'] = receivers['geometry'].to_crs('epsg:3857')
@@ -325,12 +325,17 @@ def calc_power(transmitter, receivers, interfering_tx, params,
         capacity_demand_metric = capacity_km2 // params['demand_km2']
 
         if capacity_demand_metric >= 1: #>=1 is good, capacity meets demand
-            results[tx_power] = capacity_demand_metric
+            results.append({
+                'demand_km2': params['demand_km2'],
+                'capacity_km2': capacity_km2,
+                'capacity_demand_metric': capacity_demand_metric,
+                'tx_power': tx_power,
+            })
 
     if len(results) == 0:
         return max_w
 
-    return min(results, key=results.get)
+    return min(results, key=lambda x:x['tx_power'])
 
 
 def link_capacity(receiver, tx_coords, eirp, params, modulation_and_coding_lut):
@@ -610,7 +615,9 @@ if __name__ == '__main__':
                 'active_users': len(active_receivers),
                 'total_demand_mbps': total_demand,
                 'demand_mbps_km2': params['demand_km2'],
-                'optimal_watts': optimal_watts,
+                'capacity_mbps_km2': optimal_watts['capacity_km2'],
+                'capacity_demand_metric': optimal_watts['capacity_demand_metric'],
+                'optimal_watts': optimal_watts['tx_power'],
             })
 
     output = pd.DataFrame(output)
